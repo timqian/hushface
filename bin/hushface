@@ -1,0 +1,557 @@
+#!/usr/bin/env bash
+# hushface — a local coding agent in one command: pi + Qwen3.8-27B + pi adapter.
+#
+#   hushface                 start everything (installs on first run), then pi
+#   hushface -p "fix tests"  anything hushface does not recognise goes to pi
+#
+# See `hushface help`. bash 3.2 compatible (macOS /bin/bash).
+set -uo pipefail
+
+HUSHFACE_VERSION="0.1.0"
+export HUSHFACE_CONFIG_VERSION="2"
+
+# ------------------------------------------------- resolve install location --
+_hf_src="${BASH_SOURCE[0]}"
+while [[ -L "$_hf_src" ]]; do
+  _hf_dir="$(cd -P "$(dirname "$_hf_src")" && pwd)"
+  _hf_src="$(readlink "$_hf_src")"
+  [[ "$_hf_src" != /* ]] && _hf_src="$_hf_dir/$_hf_src"
+done
+HUSHFACE_ROOT="$(cd -P "$(dirname "$_hf_src")/.." && pwd)"
+export HUSHFACE_ROOT
+
+# ------------------------------------------------------------------ defaults --
+HUSHFACE_HOME="${HUSHFACE_HOME:-$HOME/.hushface}"
+export MODELS_DIR="${MODELS_DIR:-$HUSHFACE_HOME/models}"
+CONFIG="$HUSHFACE_HOME/config.env"
+export LOG="$HUSHFACE_HOME/server.log"
+export PIDFILE="$HUSHFACE_HOME/server.pid"
+INSTALL_LOG="$HUSHFACE_HOME/install.log"
+
+export PORT=9931
+export HOST=127.0.0.1
+export CTX=65536
+export QUANT=""
+export SOURCE=auto
+export EPHEMERAL=0
+export ALIAS=qwen3.8-pi
+export PROVIDER=hushface
+export START_TIMEOUT=600
+export JOBS=4
+export ASSUME_YES=0
+export DRY_RUN=0
+export VERBOSE=0
+export NO_VERIFY=0
+export FORCE=0
+export LLAMA_BIN=""
+export SOURCE_FROM_FLAG=0
+
+# config file is lower precedence than flags, higher than defaults
+[[ -f "$CONFIG" ]] && . "$CONFIG"
+
+# shellcheck source=../lib/ui.sh
+. "$HUSHFACE_ROOT/lib/ui.sh"
+# shellcheck source=../lib/runtime.sh
+. "$HUSHFACE_ROOT/lib/runtime.sh"
+resolve_tools
+# shellcheck source=../lib/platform.sh
+. "$HUSHFACE_ROOT/lib/platform.sh"
+# shellcheck source=../lib/install.sh
+. "$HUSHFACE_ROOT/lib/install.sh"
+# shellcheck source=../lib/server.sh
+. "$HUSHFACE_ROOT/lib/server.sh"
+# shellcheck source=../lib/pi.sh
+. "$HUSHFACE_ROOT/lib/pi.sh"
+
+die() {
+  ui_err "$1"
+  [[ -n "${2:-}" ]] && ui_info "$2"
+  exit 1
+}
+
+mkdir -p "$HUSHFACE_HOME"
+
+# -------------------------------------------------------------- flag parsing --
+# Only flags before the first unrecognised token are hushface's; everything
+# after that belongs to pi (so `hushface -p "..."` and `hushface -c` work).
+SUB=""
+while (( $# )); do
+  case "$1" in
+    --yes|-y)       ASSUME_YES=1; shift ;;
+    --dry-run)      DRY_RUN=1; shift ;;
+    --verbose)      VERBOSE=1; shift ;;
+    --no-verify)    NO_VERIFY=1; shift ;;
+    --force)        FORCE=1; shift ;;
+    --ephemeral)    EPHEMERAL=1; shift ;;
+    --jobs)         JOBS="$2"; shift 2 ;;
+    --quant)        QUANT="$2"; shift 2 ;;
+    --ctx)          CTX="$2"; shift 2 ;;
+    --port)         PORT="$2"; shift 2 ;;
+    --source)       SOURCE="$2"; SOURCE_FROM_FLAG=1; shift 2 ;;
+    --version)      SUB=version; shift ;;
+    --help|-h)      SUB=help; shift ;;
+    --)             shift; break ;;
+    -*)             break ;;
+    *)              SUB="$1"; shift; break ;;
+  esac
+done
+ARGS=("$@")
+
+if [[ -n "$QUANT" ]] && ! quant_valid "$QUANT"; then
+  die "unknown quant: $QUANT" "choose Q8_0, Q6_K, Q5_K_M or Q4_K_XL"
+fi
+
+# ------------------------------------------------------------------- banner ---
+banner() {
+  [[ "${HUSHFACE_SKIP_BANNER:-0}" == "1" ]] && return 0
+  [[ -t 1 ]] || return 0
+  printf '%s\n' "$C_DIM"
+  cat <<'EOF'
+   _   _           _     __
+  | | | |_   _ ___| |__ / _| __ _  ___ ___
+  | |_| | | | / __| '_ \  _|/ _` |/ __/ _ \
+  |  _  | |_| \__ \ | | | | | (_| | (_|  __/
+  |_| |_|\__,_|___/_| |_|_|  \__,_|\___\___|
+EOF
+  printf '%s\n' "$C_RESET"
+}
+
+usage() {
+  cat <<EOF
+${C_BOLD}hushface${C_RESET} $HUSHFACE_VERSION — local coding agent: pi + Qwen3.8-27B + pi adapter
+
+${C_BOLD}Usage${C_RESET}
+  hushface [options] [-- pi args…]     start (installing on first run), then pi
+  hushface -p "fix the failing test"   pass anything unknown straight to pi
+  hushface help                        this text
+
+${C_BOLD}Options${C_RESET}
+  --yes, -y        do not ask for confirmation (needed in scripts / non-TTY)
+  --quant <q>      Q8_0 | Q6_K | Q5_K_M | Q4_K_XL   (default: picked from your RAM)
+  --ctx <n>        context window in tokens          (default: 65536)
+  --port <n>       model server port                 (default: 9931)
+  --source <s>     auto | modelscope | hf            (default: auto = ModelScope first)
+  --jobs <n>       parallel download connections     (default: 4)
+  --ephemeral      stop the model server when pi exits
+  --no-verify      skip the checksum check on downloads
+  --dry-run        show what would happen, change nothing
+  --verbose        show installer output
+  --version, --help
+
+${C_BOLD}Commands${C_RESET}
+  start, stop, restart, status     model server lifecycle
+  serve                            run the server in the foreground
+  logs [n]                         tail the server log
+  info                             what is installed, where, how big
+  doctor [--report]                check everything, incl. a real tool-call test
+  source [auto|modelscope|hf]      choose where the weights come from
+  pull                             download weights only
+  update                           update hushface itself
+  clean                            remove partial downloads and caches
+  uninstall                        remove weights, config and the pi provider
+EOF
+}
+
+# ------------------------------------------------------------------ commands --
+needs_bootstrap() {
+  [[ -f "$CONFIG" ]] || return 0
+  find_llama >/dev/null || return 0
+  local base
+  base="$MODELS_DIR/$(base_gguf_file)"
+  [[ -s "$base" ]] || return 0
+  [[ -s "$MODELS_DIR/$LORA_FILE" ]] || return 0
+  pi_available || return 0
+  return 1
+}
+
+is_bundled() { [[ -f "$HUSHFACE_ROOT/.bundled" ]]; }
+
+first_run_install() {
+  banner
+  ui_say "${C_BOLD}hushface is not set up on this machine yet.${C_RESET}"
+  if bundled_runtime; then
+    ui_info "The runtime is already bundled; it will download the model (~$(quant_size_gb "$(base_quant)") GB) and start."
+  else
+    ui_info "It will install llama.cpp, pi and a 27B model (~$(quant_size_gb "$(base_quant)") GB), then start."
+  fi
+
+  platform_preflight || {
+    ui_say ""
+    ui_err "this machine is not supported (see above)"
+    exit 1
+  }
+
+  if [[ -d "$HUSHFACE_HOME/models" ]] && \
+     ls "$HUSHFACE_HOME/models"/*.part >/dev/null 2>&1; then
+    ui_say ""
+    ui_info "found a partial download — it will resume, not restart"
+  fi
+
+  if [[ "$DRY_RUN" != "1" ]]; then choose_model_source; fi
+
+  local q weights
+  q="$(base_quant)"
+  weights="$(quant_size_gb "$q")"
+  local srctxt
+  case "$SOURCE" in
+    modelscope) srctxt="modelscope.cn (fallback: huggingface.co)" ;;
+    hf)         srctxt="huggingface.co (fallback: modelscope.cn)" ;;
+    *)          srctxt="modelscope.cn, then huggingface.co" ;;
+  esac
+  ui_say ""
+  ui_say "  quant      ${C_BOLD}$q${C_RESET} · ${weights} GB in memory"
+  ui_say "  download   ${weights} GB + adapter into $HUSHFACE_HOME"
+  ui_say "  source     $srctxt"
+  ui_say "  port       $PORT"
+  ui_say ""
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    ui_say "dry run — nothing done. Steps would be:"
+    ui_say "  1. install llama.cpp (brew, or a prebuilt macOS arm64 release)"
+    ui_say "  2. install pi via npm (node >= $MIN_NODE)"
+    ui_say "  3. download $LORA_FILE and $(base_gguf_file), resumable, checksum-verified"
+    ui_say "  4. write $CONFIG and add the '$PROVIDER' provider to $(models_json_path)"
+    ui_say "  5. start llama-server on port $PORT and launch pi"
+    return 0
+  fi
+
+  ui_confirm "Download ~${weights} GB and continue?" y || {
+    ui_info "nothing changed. re-run when ready (or use --quant Q4_K_XL for a smaller download)"
+    exit 1
+  }
+
+  ensure_llama || exit 1
+  ensure_pi || exit 1
+  ensure_models || exit 1
+  write_config
+  ui_step "Wiring pi"
+  ensure_pi_provider
+  ui_ok "config: $CONFIG"
+
+  ui_say ""
+  ui_ok "installed"
+  ui_say ""
+  ui_say "  ${C_BOLD}how to use${C_RESET}"
+  ui_say "    hushface                      interactive session in this directory"
+  ui_say "    hushface -p \"fix the tests\"   one-shot, prints the answer"
+  ui_say "    hushface -c                   continue the last session"
+  ui_say "    hushface stop                 free ~22 GB of RAM"
+  ui_say "    hushface doctor               if anything looks broken"
+  ui_say ""
+}
+
+ensure_ready() {
+  if needs_bootstrap; then
+    first_run_install
+    [[ "$DRY_RUN" == "1" ]] && exit 0
+  fi
+  ensure_pi_provider >/dev/null
+}
+
+run_pi() {
+  if (( ${#ARGS[@]} )); then
+    "$PI_BIN" --provider "$PROVIDER" --model "$ALIAS" --thinking off "${ARGS[@]}"
+  else
+    "$PI_BIN" --provider "$PROVIDER" --model "$ALIAS" --thinking off
+  fi
+}
+
+# The weights exist on both hubs. Ask once (when there is a terminal and the
+# user has not already expressed a preference) and remember the answer.
+choose_model_source() {
+  local cur="${SOURCE:-auto}"
+  if [[ "$SOURCE_FROM_FLAG" == "1" ]]; then return 0; fi
+  case "$cur" in
+    hf|modelscope) return 0 ;;   # already answered, in config.env
+  esac
+  if [[ ! -t 0 ]]; then return 0; fi   # no terminal: keep auto
+
+  local ms hf
+  if http_ok "$(source_url modelscope)"; then ms="${C_GRN}reachable${C_RESET}"; else ms="${C_YEL}not reachable${C_RESET}"; fi
+  if http_ok "$(source_url hf)"; then hf="${C_GRN}reachable${C_RESET}"; else hf="${C_YEL}not reachable${C_RESET}"; fi
+
+  ui_choose "Where should the model come from?" 1 \
+    "ModelScope   modelscope.cn   · fast in mainland China · $ms" \
+    "Hugging Face huggingface.co  · the original repo       · $hf"
+  case "$UI_CHOICE" in
+    2) SOURCE=hf ;;
+    *) SOURCE=modelscope ;;
+  esac
+  config_set SOURCE "$SOURCE"
+  if [[ "$SOURCE" == "hf" ]]; then
+    ui_ok "using huggingface.co (falls back to modelscope.cn if it fails)"
+  else
+    ui_ok "using modelscope.cn (falls back to huggingface.co if it fails)"
+  fi
+}
+
+cmd_run() {
+  ensure_ready
+  if ! healthy; then
+    start_server || exit 1
+  fi
+  if ! pi_available; then
+    die "pi is not on PATH" "open a new terminal, or find it with: npm bin -g"
+  fi
+  ui_info "model $ALIAS on $(base_url) · ctx $CTX · $(base_quant)"
+  if [[ "$EPHEMERAL" == "1" ]]; then
+    # cannot exec: the server has to be stopped afterwards
+    local rc=0
+    run_pi || rc=$?
+    stop_server >/dev/null 2>&1
+    exit $rc
+  fi
+  if (( ${#ARGS[@]} )); then
+    exec "$PI_BIN" --provider "$PROVIDER" --model "$ALIAS" --thinking off "${ARGS[@]}"
+  else
+    exec "$PI_BIN" --provider "$PROVIDER" --model "$ALIAS" --thinking off
+  fi
+}
+
+cmd_info() {
+  ui_step "hushface $HUSHFACE_VERSION"
+  ui_say "  install   $HUSHFACE_ROOT"
+  ui_say "  home      $HUSHFACE_HOME"
+  ui_say "  config    $CONFIG $([[ -f "$CONFIG" ]] && echo '' || echo '(not written yet)')"
+  local bin
+  if bin="$(find_llama)"; then ui_say "  llama.cpp $(llama_version)  [$bin]"
+  else ui_say "  llama.cpp missing"; fi
+  if pi_available; then ui_say "  pi        $(pi_version)"; else ui_say "  pi        missing"; fi
+  if bundled_runtime; then
+    ui_say "  runtime   bundled ($(runtime_version node) node, llama.cpp $(runtime_version llama.server))"
+  fi
+  ui_say "  ram       $(plat_ram_gb) GB · quant $(base_quant) · ctx $CTX"
+  ui_say "  source    $SOURCE"
+  local f
+  for f in "$MODELS_DIR/$(base_gguf_file)" "$MODELS_DIR/$LORA_FILE"; do
+    if [[ -f "$f" ]]; then
+      ui_say "  model     $(basename "$f") $(human_bytes "$(stat -f%z "$f")")"
+    else
+      ui_say "  model     $(basename "$f") missing"
+    fi
+  done
+  if healthy; then
+    ui_say "  server    up on $(base_url) ($(server_model_ids))"
+  else
+    ui_say "  server    down"
+  fi
+}
+
+smoke_tool_call() {
+  curl -sf -m 120 "$(base_url)/v1/chat/completions" -H 'content-type: application/json' -d "{
+    \"model\": \"$ALIAS\",
+    \"messages\": [{\"role\":\"user\",\"content\":\"run ls in the current directory\"}],
+    \"tools\": [{\"type\":\"function\",\"function\":{\"name\":\"bash\",
+      \"description\":\"run a shell command\",
+      \"parameters\":{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},
+      \"required\":[\"command\"]}}}]}" \
+  | "$NODE" -e '
+    let raw = "";
+    process.stdin.on("data", (c) => { raw += c; });
+    process.stdin.on("end", () => {
+      const msg = JSON.parse(raw).choices[0].message;
+      const tc = msg.tool_calls || [];
+      process.stdout.write("tool_call: " + (tc.length ? tc[0].function.name : "NONE — tool calling is broken"));
+      process.exit(tc.length ? 0 : 1);
+    });' 2>/dev/null
+}
+
+cmd_doctor() {
+  local ok=0 notes=0
+  ui_step "hushface doctor"
+  {
+    echo "hushface $HUSHFACE_VERSION"
+    echo "macOS $(plat_macos) $(plat_arch) · $(plat_ram_gb) GB · $(plat_cores) cores"
+    [[ -n "$(node_version)" ]] && echo "node $(node_version)"
+    pi_available && echo "pi $(pi_version)"
+    find_llama >/dev/null && echo "llama.cpp $(llama_version)"
+    echo "quant $(base_quant) · ctx $CTX · source $SOURCE · port $PORT"
+    healthy && echo "server up: $(server_model_ids)" || echo "server down"
+    echo "home $HUSHFACE_HOME"
+  } | sed 's/^/  /'
+  ui_say ""
+
+  have curl || { ui_err "curl missing"; ok=1; }
+  node_available || { ui_err "node missing"; ok=1; }
+  pi_available || { ui_err "pi not on PATH"; ok=1; }
+  find_llama >/dev/null || { ui_err "llama.cpp not found"; ok=1; }
+  [[ -s "$MODELS_DIR/$(base_gguf_file)" ]] || { ui_err "missing $(base_gguf_file)"; ok=1; }
+  [[ -s "$MODELS_DIR/$LORA_FILE" ]] || { ui_err "missing $LORA_FILE"; ok=1; }
+  pi_provider_present || { ui_err "provider '$PROVIDER' missing from $(models_json_path)"; ok=1; }
+
+  local ms hf
+  ms="$(curl -s -o /dev/null -m 8 -w '%{http_code}' https://modelscope.cn 2>/dev/null)"
+  hf="$(curl -s -o /dev/null -m 8 -w '%{http_code}' https://huggingface.co 2>/dev/null)"
+  ui_info "net: modelscope=${ms:-timeout} huggingface=${hf:-timeout} (source=$SOURCE)"
+
+  if healthy; then
+    ui_ok "health ok on $(base_url)"
+    case "$(server_model_ids)" in
+      *"$ALIAS"*) ui_ok "serving $ALIAS" ;;
+      *) ui_err "server is up but not serving $ALIAS"; ok=1 ;;
+    esac
+    local out
+    if out="$(smoke_tool_call)"; then ui_ok "$out"; else ui_err "${out:-smoke test failed}"; ok=1; fi
+  else
+    ui_warn "server not running (hushface start)"
+    notes=1
+  fi
+
+  if [[ "${1:-}" == "--report" ]]; then
+    ui_say ""
+    ui_say "--- copy below ---"
+    {
+      echo "hushface $HUSHFACE_VERSION report"
+      echo "macOS $(plat_macos) $(plat_arch) $(plat_ram_gb)GB cores=$(plat_cores)"
+      echo "free=$(plat_free_gb "$HUSHFACE_HOME")GB quant=$(base_quant) ctx=$CTX port=$PORT source=$SOURCE"
+      echo "node=$(node_version) pi=$(pi_version)"
+      find_llama >/dev/null && echo "llama=$(llama_version)"
+      echo "net modelscope=$ms hf=$hf"
+      echo "--- server.log tail ---"
+      tail -n 15 "$LOG" 2>/dev/null
+    } | sed 's/^/  /'
+  fi
+
+  if (( ok != 0 )); then
+    ui_err "problems listed above"
+  elif (( notes )); then
+    ui_ok "install is healthy; the model server is just not running"
+  else
+    ui_ok "all good"
+  fi
+  return $ok
+}
+
+cmd_update() {
+  if is_bundled; then
+    local base="${HUSHFACE_RELEASES:-https://hushface.com/releases/latest}"
+    local asset="hushface-macos-arm64.sh" tmp before after
+    before="$HUSHFACE_VERSION"
+    ui_step "Checking for a newer hushface"
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/hushface-update.XXXXXX")"
+    if ! curl -fL --retry 2 --connect-timeout 20 --progress-bar "$base/$asset" -o "$tmp/$asset"; then
+      rm -rf "$tmp"
+      die "could not download $base/$asset" "already at $before; nothing changed"
+    fi
+    if curl -fsL --connect-timeout 20 "$base/$asset.sha256" -o "$tmp/sum" 2>/dev/null; then
+      local want got
+      want="$(cut -d' ' -f1 <"$tmp/sum")"
+      got="$(shasum -a 256 "$tmp/$asset" | cut -d' ' -f1)"
+      [[ "$want" == "$got" ]] || { rm -rf "$tmp"; die "checksum mismatch"; }
+    fi
+    # the installer swaps $HUSHFACE_ROOT underneath us; we keep running from the
+    # inode that is already open, so this is safe
+    if ! sh "$tmp/$asset" --no-run; then
+      rm -rf "$tmp"
+      die "update failed"
+    fi
+    rm -rf "$tmp"
+    after="$(runtime_version hushface 2>/dev/null || echo "$before")"
+    if [[ "$after" == "$before" ]]; then
+      ui_ok "already the latest ($before)"
+    else
+      ui_ok "updated $before → $after"
+    fi
+    ui_info "restart any running session to use it"
+    return 0
+  fi
+  if [[ -d "$HUSHFACE_ROOT/.git" ]]; then
+    ui_step "Updating hushface"
+    ui_run "git pull" "$INSTALL_LOG" git -C "$HUSHFACE_ROOT" pull --ff-only || \
+      die "update failed" "your checkout has local changes; fix them or reinstall"
+    ui_ok "hushface $(sed -n 's/^HUSHFACE_VERSION="\(.*\)"/\1/p' "$HUSHFACE_ROOT/bin/hushface")"
+  else
+    ui_info "not a git checkout ($HUSHFACE_ROOT) — reinstall to update"
+  fi
+}
+
+cmd_pull() {
+  ensure_ready
+  ensure_models || exit 1
+}
+
+cmd_clean() {
+  local freed=0
+  if [[ -d "$HUSHFACE_HOME/.downloads" ]]; then
+    freed=$(( freed + $(du -sk "$HUSHFACE_HOME/.downloads" 2>/dev/null | awk '{print $1}') ))
+    rm -rf "$HUSHFACE_HOME/.downloads"
+  fi
+  if [[ -d "$HUSHFACE_HOME/.cache" ]]; then
+    freed=$(( freed + $(du -sk "$HUSHFACE_HOME/.cache" 2>/dev/null | awk '{print $1}') ))
+    rm -rf "$HUSHFACE_HOME/.cache"
+  fi
+  local p
+  for p in "$MODELS_DIR"/*.part "$MODELS_DIR"/*.part.state; do
+    [[ -f "$p" ]] && { freed=$(( freed + $(du -sk "$p" | awk '{print $1}') )); rm -f "$p"; }
+  done
+  [[ -f "$LOG.1" ]] && rm -f "$LOG.1"
+  ui_ok "freed ~$(human_bytes $((freed * 1024)))"
+}
+
+cmd_uninstall() {
+  ui_step "Uninstalling hushface"
+  ui_say "  this removes: $HUSHFACE_HOME (weights, config, logs)"
+  ui_say "  this removes: the '$PROVIDER' provider from $(models_json_path)"
+  if is_bundled; then
+    ui_say "  this removes: $HUSHFACE_ROOT (app + bundled runtime) and the hushface link"
+  else
+    ui_say "  this keeps:   pi, llama.cpp, $HUSHFACE_ROOT"
+  fi
+  ui_confirm "Continue?" n || { ui_info "cancelled"; exit 1; }
+  stop_server >/dev/null 2>&1
+  remove_pi_provider
+  rm -rf "$HUSHFACE_HOME"
+  ui_ok "removed $HUSHFACE_HOME"
+  if is_bundled; then
+    local root="$HUSHFACE_ROOT"
+    rm -f "${HUSHFACE_BIN_DIR:-$HOME/.local/bin}/hushface"
+    ui_ok "removed the hushface link"
+    # the running script lives inside $root, so delete it after we exit
+    ( sleep 1; rm -rf "$root" ) >/dev/null 2>&1 &
+    ui_ok "removing $root (app + runtime) in the background"
+  else
+    ui_info "the source tree is at $HUSHFACE_ROOT"
+  fi
+}
+
+# -------------------------------------------------------------------- main ----
+case "${SUB:-}" in
+  ""|run)   cmd_run ;;
+  help)     usage ;;
+  version)  ui_say "hushface $HUSHFACE_VERSION" ;;
+  info)     cmd_info ;;
+  doctor)   cmd_doctor "${ARGS[0]:-}" ;;
+  update)   cmd_update ;;
+  pull)     cmd_pull ;;
+  clean)    cmd_clean ;;
+  uninstall) cmd_uninstall ;;
+  start)    ensure_ready; start_server ;;
+  restart)  stop_server >/dev/null 2>&1; ensure_ready; start_server ;;
+  stop)     stop_server ;;
+  serve)    export HUSHFACE_FOREGROUND=1; ensure_ready; start_server ;;
+  status)
+    if healthy; then
+      ui_ok "up on $(base_url) — $(server_model_ids)"
+    else
+      ui_info "down (port $PORT)"
+    fi
+    pid="$(stale_pid)" && ui_say "  pid $pid"
+    ;;
+  logs)
+    [[ -f "$LOG" ]] || die "no log yet ($LOG)"
+    if [[ -n "${ARGS[0]:-}" ]]; then tail -n "${ARGS[0]}" "$LOG"; else tail -n 60 -f "$LOG"; fi ;;
+  source)
+    case "${ARGS[0]:-}" in
+      "") ui_say "model source: $(config_get SOURCE 2>/dev/null || echo auto)"
+          ui_info "change it with: hushface source modelscope|hf|auto" ;;
+      auto|modelscope|hf)
+        config_set SOURCE "$1"
+        ui_ok "model source: $1"
+        ui_info "takes effect on the next download (hushface pull)" ;;
+      *) die "usage: hushface source [auto|modelscope|hf]" ;;
+    esac ;;
+  *)
+    # not a subcommand: treat as pi arguments, e.g. `hushface "explain this repo"`
+    if (( ${#ARGS[@]} )); then ARGS=("$SUB" "${ARGS[@]}"); else ARGS=("$SUB"); fi
+    cmd_run ;;
+esac

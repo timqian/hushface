@@ -1,0 +1,30 @@
+# Cloudflare Worker that serves hushface.com out of R2.
+#
+#   npx wrangler r2 bucket create hushface-releases   # once
+#   npx wrangler deploy                               # from this directory
+#
+# TOML ORDER MATTERS: everything after a [[table]] header belongs to that table,
+# so these top-level keys (workers_dev, preview_urls, routes) must stay ABOVE
+# [[r2_buckets]]. Put them below and wrangler reads them as r2_buckets keys
+# ("Unexpected fields found in r2_buckets[0]: routes") and deploys the worker
+# with no domain attached — the worker answers on workers.dev, the apex does not.
+name = "hushface"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# keep the *.workers.dev hostname too: it is a useful fallback, and a way to tell
+# "worker is broken" from "domain is not wired to the worker"
+workers_dev = true
+preview_urls = false
+
+# custom_domain = true is what makes the apex resolve: Cloudflare creates the
+# proxied DNS record and issues the certificate. A pattern/zone_name route only
+# matches traffic that already reaches Cloudflare — it creates no DNS.
+routes = [
+  { pattern = "hushface.com", custom_domain = true },
+  { pattern = "www.hushface.com", custom_domain = true }
+]
+
+[[r2_buckets]]
+binding = "RELEASES"
+bucket_name = "hushface-releases"
