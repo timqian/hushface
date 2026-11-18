@@ -131,6 +131,13 @@ human_bytes() {
     if(i==1) printf "%.0f %s",b,u[i]; else printf "%.1f %s",b,u[i]}'
 }
 
+# decimal units (1 GB = 1e9), for sizes quoted in the docs
+human_bytes10() {
+  awk -v b="${1:-0}" 'BEGIN{split("B KB MB GB TB",u," ");i=1;
+    while(b>=1000 && i<5){b/=1000;i++}
+    if(i==1) printf "%.0f %s",b,u[i]; else printf "%.1f %s",b,u[i]}'
+}
+
 human_dur() {
   awk -v s="${1:-0}" 'BEGIN{
     if(s<0||s>31536000){print "--"; exit}

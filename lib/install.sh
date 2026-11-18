@@ -260,6 +260,27 @@ fetch_one() {
   return 1
 }
 
+# bytes of the base model + adapter already on disk
+model_bytes_present() {
+  local total=0 f
+  for f in "$MODELS_DIR/$(base_gguf_file)" "$MODELS_DIR/$LORA_FILE"; do
+    if [[ -s "$f" ]]; then total=$(( total + $(stat -f%z "$f" 2>/dev/null || echo 0) )); fi
+  done
+  printf '%s' "$total"
+}
+
+# bytes we would still have to download for the chosen quant
+model_bytes_missing() {
+  local want have
+  want=$(( $(quant_size_gb "$(base_quant)") * 1024 * 1024 * 1024 + 318802304 ))
+  have="$(model_bytes_present)"
+  if (( have >= want )); then printf '0'; else printf '%s' $(( want - have )); fi
+}
+
+model_ready() {
+  [[ -s "$MODELS_DIR/$(base_gguf_file)" && -s "$MODELS_DIR/$LORA_FILE" ]]
+}
+
 ensure_models() {
   ui_step "Downloading model weights"
   local base

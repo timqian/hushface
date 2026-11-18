@@ -7,7 +7,7 @@
 # See `hushface help`. bash 3.2 compatible (macOS /bin/bash).
 set -uo pipefail
 
-HUSHFACE_VERSION="0.1.0"
+HUSHFACE_VERSION="0.1.1"
 export HUSHFACE_CONFIG_VERSION="2"
 
 # ------------------------------------------------- resolve install location --
@@ -187,38 +187,57 @@ first_run_install() {
     ui_info "found a partial download — it will resume, not restart"
   fi
 
-  if [[ "$DRY_RUN" != "1" ]]; then choose_model_source; fi
-
-  local q weights
+  local q weights missing_bytes missing_gb have_it=0
   q="$(base_quant)"
   weights="$(quant_size_gb "$q")"
-  local srctxt
+  missing_bytes="$(model_bytes_missing)"
+  missing_gb=$(( (missing_bytes + 1024 * 1024 * 1024 - 1) / 1024 / 1024 / 1024 ))
+  model_ready && have_it=1
+
+  # nothing to download: no source question, no size question
+  if (( have_it == 0 )) && [[ "$DRY_RUN" != "1" ]]; then choose_model_source; fi
+
+  local srctxt dl_line
   case "$SOURCE" in
     modelscope) srctxt="modelscope.cn (fallback: huggingface.co)" ;;
     hf)         srctxt="huggingface.co (fallback: modelscope.cn)" ;;
     *)          srctxt="modelscope.cn, then huggingface.co" ;;
   esac
+  if (( have_it == 1 )); then
+    dl_line="${C_GRN}already on disk${C_RESET} · $(human_bytes10 "$(model_bytes_present)") in $MODELS_DIR"
+  elif (( missing_bytes == 0 )); then
+    dl_line="finishing a partial download into $MODELS_DIR"
+  else
+    dl_line="$(human_bytes10 "$missing_bytes") into $MODELS_DIR"
+  fi
   ui_say ""
   ui_say "  quant      ${C_BOLD}$q${C_RESET} · ${weights} GB in memory"
-  ui_say "  download   ${weights} GB + adapter into $HUSHFACE_HOME"
-  ui_say "  source     $srctxt"
+  ui_say "  model      $dl_line"
+  (( have_it == 0 )) && ui_say "  source     $srctxt"
   ui_say "  port       $PORT"
   ui_say ""
 
   if [[ "$DRY_RUN" == "1" ]]; then
+    local n=0
     ui_say "dry run — nothing done. Steps would be:"
-    ui_say "  1. install llama.cpp (brew, or a prebuilt macOS arm64 release)"
-    ui_say "  2. install pi via npm (node >= $MIN_NODE)"
-    ui_say "  3. download $LORA_FILE and $(base_gguf_file), resumable, checksum-verified"
-    ui_say "  4. write $CONFIG and add the '$PROVIDER' provider to $(models_json_path)"
-    ui_say "  5. start llama-server on port $PORT and launch pi"
+    n=$((n + 1)); ui_say "  $n. install llama.cpp (bundled here, otherwise brew or a release)"
+    n=$((n + 1)); ui_say "  $n. install pi (bundled here, otherwise npm, node >= $MIN_NODE)"
+    if (( have_it == 0 )); then
+      n=$((n + 1)); ui_say "  $n. download $(base_gguf_file) and $LORA_FILE — resumable, checksum-verified"
+    fi
+    n=$((n + 1)); ui_say "  $n. write $CONFIG and add the '$PROVIDER' provider to $(models_json_path)"
+    n=$((n + 1)); ui_say "  $n. start llama-server on port $PORT and launch pi"
     return 0
   fi
 
-  ui_confirm "Download ~${weights} GB and continue?" y || {
-    ui_info "nothing changed. re-run when ready (or use --quant Q4_K_XL for a smaller download)"
-    exit 1
-  }
+  if (( have_it == 1 )); then
+    ui_info "using the model already in $MODELS_DIR — checksummed once, then remembered"
+  else
+    ui_confirm "Download ~${missing_gb} GB and continue?" y || {
+      ui_info "nothing changed. re-run when ready (or use --quant Q4_K_XL for a smaller download)"
+      exit 1
+    }
+  fi
 
   ensure_llama || exit 1
   ensure_pi || exit 1

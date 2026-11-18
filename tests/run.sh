@@ -473,7 +473,15 @@ t_model_source() {
   rm -f "$HUSHFACE_HOME/config.env"
   local out
   out="$(HUSHFACE_SKIP_BANNER=1 "$HF" --dry-run --yes </dev/null 2>&1)"
-  assert_has "$out" "source" "dry run still reports a source"
+  assert_has "$out" "already on disk" "dry run notices the model is already there"
+  assert_lacks "$out" "Download ~" "no download question when the model is on disk"
+
+  # and it plans a download (with a source) when the model is missing
+  mv "$HUSHFACE_HOME/models" "$HUSHFACE_HOME/models.off"
+  out="$(HUSHFACE_SKIP_BANNER=1 "$HF" --dry-run --yes </dev/null 2>&1)"
+  assert_has "$out" "GB into" "dry run sizes the download"
+  assert_has "$out" "source  " "dry run names a source when the model is missing"
+  mv "$HUSHFACE_HOME/models.off" "$HUSHFACE_HOME/models"
 }
 
 t_info_and_clean() {

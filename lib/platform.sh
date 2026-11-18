@@ -124,11 +124,17 @@ platform_preflight() {
     ui_info "  Q8_0 (29 GB) would be closer to the trained weights; --quant Q8_0 if you keep apps closed"
   fi
 
-  # 4. disk
+  # 4. disk — only the part of the model that is not on disk yet
   if [[ -n "$PLAT_QUANT" ]]; then
-    local need_gb=$(( $(quant_size_gb "$PLAT_QUANT") + MIN_FREE_AFTER_GB ))
+    local missing_gb need_gb
+    missing_gb=$(( ($(model_bytes_missing) + 1024 * 1024 * 1024 - 1) / 1024 / 1024 / 1024 ))
+    need_gb=$(( missing_gb + MIN_FREE_AFTER_GB ))
     if (( free_gb >= need_gb )); then
-      ui_ok "${free_gb} GB free on $(dirname "$HUSHFACE_HOME") (need ${need_gb} GB)"
+      if (( missing_gb == 0 )); then
+        ui_ok "${free_gb} GB free on $(dirname "$HUSHFACE_HOME") (model already on disk, ${need_gb} GB of room needed)"
+      else
+        ui_ok "${free_gb} GB free on $(dirname "$HUSHFACE_HOME") (need ${need_gb} GB: ${missing_gb} GB download + room)"
+      fi
     else
       ui_err "only ${free_gb} GB free, need ${need_gb} GB in $HUSHFACE_HOME"
       PLAT_OK=0
