@@ -115,8 +115,14 @@ Any static host works; keep the same layout and point the client at it:
 HUSHFACE_RELEASES=https://your-host/releases/latest sh install.sh
 ```
 
-GitHub releases remain a working fallback:
+GitHub releases are a working fallback — `tools/release.sh` output is uploaded
+under both `hushface-macos-arm64.sh` (the name the installer asks for) and the
+versioned name:
 
 ```bash
 HUSHFACE_RELEASES=https://github.com/timqian/hushface/releases/latest/download sh install.sh
 ```
+
+If a stable-named asset ever 404s right after `gh release upload --clobber`
+(while `gh release download` still works), delete that asset and re-upload it;
+GitHub occasionally keeps a stale entry for a clobbered name.

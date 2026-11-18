@@ -232,7 +232,8 @@ record and certificate — and those keys have to sit *above* `[[r2_buckets]]` i
 `wrangler.toml`, or wrangler reads them as bucket settings and attaches nothing
 (`tests/run.sh` guards it). `cloudflare/README.md` has the troubleshooting list. Any other
 static host works too — keep the layout and point `HUSHFACE_RELEASES` at it.
-GitHub releases remain a fallback:
+GitHub releases are a working fallback (both the stable `hushface-macos-arm64.sh`
+and the versioned asset are uploaded there):
 
 ```bash
 HUSHFACE_RELEASES=https://github.com/timqian/hushface/releases/latest/download sh install.sh
