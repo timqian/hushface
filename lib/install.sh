@@ -197,7 +197,7 @@ verify_existing() { # repo file dest
   marker="$HUSHFACE_HOME/verified/$(basename "$dest").$(stat -f%z "$dest")"
   [[ -f "$marker" ]] && return 0
   local src
-  for src in ${SOURCE:-auto} modelscope hf; do
+  for src in ${SOURCE:-auto} hf modelscope; do
     [[ "$src" == auto ]] && continue
     line="$(hub resolve --source "$src" --repo "$repo" --file "$file" 2>/dev/null)" || continue
     sha="$(printf '%s' "$line" | cut -f3)"
@@ -231,7 +231,7 @@ fetch_one() {
   case "${SOURCE:-auto}" in
     modelscope) sources=(modelscope) ;;
     hf)         sources=(hf) ;;
-    *)          sources=(modelscope hf) ;;
+    *)          sources=(hf modelscope) ;;
   esac
   adopt_partial "$file" "$dest"
   for src in "${sources[@]}"; do

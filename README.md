@@ -66,12 +66,12 @@ Checking this machine
 
   quant      Q6_K · 22 GB in memory
   download   22 GB + adapter into ~/.hushface
-  source     modelscope.cn, falling back to huggingface.co
+  source     huggingface.co, falling back to modelscope.cn
   port       9931
 
 Where should the model come from?
-  1) ModelScope   modelscope.cn   · fast in mainland China · reachable
-  2) Hugging Face huggingface.co  · the original repo       · reachable
+  1) Hugging Face huggingface.co  · the original repo       · reachable
+  2) ModelScope   modelscope.cn   · fast in mainland China · reachable
 choose [1-2] (default 1): 2
 
 Download ~22 GB and continue? [Y/n]
@@ -108,7 +108,8 @@ Qwen3.8-27B-UD-Q6_K.gguf [##########>-----------]  46.2%  10.1 GB/20.5 GB  53.9 
   adopted instead of thrown away;
 - the SHA-256 published by ModelScope (`Sha256`) or Hugging Face (`lfs.oid`) is
   verified after download, and pre-existing files are verified once;
-- **the hub you picked** is tried first, the other one is the fallback
+- **the hub you picked** is tried first (Hugging Face is the default), the
+  other one is the fallback
   (`--source hf|modelscope` to force one, `hushface source` to change the default).
 
 ## Commands
@@ -276,6 +277,7 @@ better (downloads, JSON, HTTP).
 - The 73 MB payload is served from `hushface.com` (Cloudflare R2 behind a Worker).
   If that is slow or blocked, `HUSHFACE_RELEASES` points the installer at any
   mirror with the same layout. The 22 GB of weights come from the hub you pick
-  at first run, ModelScope being the fast one in mainland China.
+  at first run — Hugging Face by default, ModelScope if you are in mainland
+  China and want the faster one.
 - `install.sh`/the git path is the developer workflow; the artifact is what
   users should get.

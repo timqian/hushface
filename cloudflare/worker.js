@@ -86,7 +86,7 @@ function landing() {
      carries its own runtime — Node, pi, llama.cpp — so there is no Homebrew, no
      npm, no Xcode tools to install first. The 22&nbsp;GB of weights come down on
      first run, resumably and checksum-verified, from
-     <strong>ModelScope</strong> or <strong>Hugging Face</strong> — your pick.</p>
+     <strong>Hugging Face</strong> or <strong>ModelScope</strong> — your pick.</p>
 
   <ul>
     <li>Apple Silicon (M1 or newer), macOS 13+</li>

@@ -7,7 +7,7 @@
 # See `hushface help`. bash 3.2 compatible (macOS /bin/bash).
 set -uo pipefail
 
-HUSHFACE_VERSION="0.1.1"
+HUSHFACE_VERSION="0.1.2"
 export HUSHFACE_CONFIG_VERSION="2"
 
 # ------------------------------------------------- resolve install location --
@@ -130,7 +130,7 @@ ${C_BOLD}Options${C_RESET}
   --quant <q>      Q8_0 | Q6_K | Q5_K_M | Q4_K_XL   (default: picked from your RAM)
   --ctx <n>        context window in tokens          (default: 65536)
   --port <n>       model server port                 (default: 9931)
-  --source <s>     auto | modelscope | hf            (default: auto = ModelScope first)
+  --source <s>     auto | hf | modelscope            (default: auto = Hugging Face first)
   --jobs <n>       parallel download connections     (default: 4)
   --ephemeral      stop the model server when pi exits
   --no-verify      skip the checksum check on downloads
@@ -199,9 +199,9 @@ first_run_install() {
 
   local srctxt dl_line
   case "$SOURCE" in
-    modelscope) srctxt="modelscope.cn (fallback: huggingface.co)" ;;
     hf)         srctxt="huggingface.co (fallback: modelscope.cn)" ;;
-    *)          srctxt="modelscope.cn, then huggingface.co" ;;
+    modelscope) srctxt="modelscope.cn (fallback: huggingface.co)" ;;
+    *)          srctxt="huggingface.co, then modelscope.cn" ;;
   esac
   if (( have_it == 1 )); then
     dl_line="${C_GRN}already on disk${C_RESET} · $(human_bytes10 "$(model_bytes_present)") in $MODELS_DIR"
@@ -290,11 +290,11 @@ choose_model_source() {
   if http_ok "$(source_url hf)"; then hf="${C_GRN}reachable${C_RESET}"; else hf="${C_YEL}not reachable${C_RESET}"; fi
 
   ui_choose "Where should the model come from?" 1 \
-    "ModelScope   modelscope.cn   · fast in mainland China · $ms" \
-    "Hugging Face huggingface.co  · the original repo       · $hf"
+    "Hugging Face  huggingface.co  · the original repo       · $hf" \
+    "ModelScope    modelscope.cn   · fast in mainland China · $ms"
   case "$UI_CHOICE" in
-    2) SOURCE=hf ;;
-    *) SOURCE=modelscope ;;
+    2) SOURCE=modelscope ;;
+    *) SOURCE=hf ;;
   esac
   config_set SOURCE "$SOURCE"
   if [[ "$SOURCE" == "hf" ]]; then

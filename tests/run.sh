@@ -110,7 +110,8 @@ EOF
 
 # ---------------------------------------------------------------- test cases --
 t_cli_basics() {
-  assert_eq "$("$HF" --version)" "hushface 0.1.0" "--version"
+  assert_eq "$("$HF" --version)" "hushface $(sed -n 's/^HUSHFACE_VERSION="\(.*\)"/\1/p' "$ROOT/bin/hushface")" \
+    "--version"
   assert_has "$("$HF" help)" "uninstall" "help lists commands"
   assert_has "$("$HF" help)" "--dry-run" "help lists options"
 }
@@ -268,7 +269,7 @@ t_fetch_one() {
     bash -c "set -uo pipefail
       . '$ROOT/lib/ui.sh'; . '$ROOT/lib/runtime.sh'; . '$ROOT/lib/platform.sh'; . '$ROOT/lib/install.sh'
       HUSHFACE_HOME='$home'; HUSHFACE_ROOT='$ROOT'
-      hub() { printf 'http://127.0.0.1:20031/model.gguf\t2097152\t$want\n'; }
+      hub() { printf '%s\n' \"\$3\" >>'$home/hub-calls'; printf 'http://127.0.0.1:20031/model.gguf\t2097152\t$want\n'; }
       $1" 2>&1
   }
 
@@ -276,7 +277,11 @@ t_fetch_one() {
   out="$(fetch "fetch_one x/y model.gguf $home/models/model.gguf")"
   assert_eq "$(shasum -a 256 "$home/models/model.gguf" | awk '{print $1}')" "$want" \
     "fetch_one downloads and verifies"
-  assert_has "$out" "modelscope" "fetch_one reports the source"
+  assert_eq "$(head -1 "$home/hub-calls")" "hf" "auto asks Hugging Face first"
+  rm -f "$home/models/model.gguf"
+  out="$(SOURCE=modelscope fetch "fetch_one x/y model.gguf $home/models/model.gguf")"
+  assert_has "$out" "modelscope" "fetch_one reports the source it used"
+  rm -f "$home/models/model.gguf"
 
   # an interrupted modelscope CLI download must be adopted, not re-fetched
   rm -f "$home/models/model.gguf"
@@ -343,6 +348,11 @@ t_cf_worker() {
   assert_has "$page" "curl -LsSf https://hushface.com/install.sh" "landing page carries the one-liner"
   assert_has "$page" "https://github.com/timqian/hushface" "landing page links the GitHub repo"
   assert_has "$page" "Apple Silicon" "landing page states the requirements"
+  local hf_at ms_at
+  hf_at="$(printf '%s' "$page" | grep -bo "Hugging Face" | head -1 | cut -d: -f1)"
+  ms_at="$(printf '%s' "$page" | grep -bo "ModelScope" | head -1 | cut -d: -f1)"
+  assert_eq "$([[ -n "$hf_at" && -n "$ms_at" && "$hf_at" -lt "$ms_at" ]] && echo ok || echo bad)" \
+    "ok" "landing page lists Hugging Face before ModelScope"
   assert_has "$page" "/hushface-macos-arm64.sh.sha256" "landing page links the checksum"
 
   # ranged requests are what resumable downloads depend on

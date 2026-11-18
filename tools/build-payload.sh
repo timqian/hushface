@@ -84,6 +84,7 @@ if [[ -z "$PI_VERSION" ]]; then
 fi
 step "pi $PI_VERSION"
 LOCAL_PI="$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"
+[[ -d "$LOCAL_PI" ]] || LOCAL_PI=""
 mkdir -p "$PAYLOAD/runtime/pi"
 if [[ "$FROM_LOCAL" == "1" && -d "$LOCAL_PI" ]]; then
   step "using local npm install at $LOCAL_PI"
@@ -98,8 +99,54 @@ else
   cp -R "$CACHE/pi/package/dist" "$PAYLOAD/runtime/pi/dist"
   cp "$CACHE/pi/package/package.json" "$PAYLOAD/runtime/pi/"
 fi
-# the bundled cli.js has no node_modules dependency
 [[ -f "$PAYLOAD/runtime/pi/dist/bundle/cli.js" ]] || die "pi bundle missing"
+
+# pi's bundled cli.js still `require()`s a few packages at runtime instead of
+# inlining them (observed in dist/bundle/chunks/*-jiti-static-loader-*.js).
+# Without them any TypeScript extension in ~/.pi/agent/extensions dies with
+# "Cannot find module 'jiti'".
+RUNTIME_DEPS="jiti @silvia-odwyer/photon-node"
+
+# version pinned by pi itself, so the bundled copies match what pi expects
+pi_dep_version() { # name
+  "$PAYLOAD/runtime/node/bin/node" -e '
+    const p = require(process.argv[1]).dependencies || {};
+    const want = p[process.argv[2]];
+    if (!want) process.exit(1);
+    process.stdout.write(String(want).replace(/^[~^=]+/, ""));
+  ' "$PAYLOAD/runtime/pi/package.json" "$1" 2>/dev/null
+}
+
+install_runtime_dep() { # name
+  local name="$1" spec dest="$PAYLOAD/runtime/pi/node_modules/$1"
+  spec="$(pi_dep_version "$name")"
+  [[ -n "$spec" ]] || { step "skip $name (pi does not depend on it)"; return 0; }
+
+  mkdir -p "$(dirname "$dest")"
+  if [[ -n "${LOCAL_PI:-}" && -d "$LOCAL_PI/node_modules/$name" ]]; then
+    step "$name@$spec (from the local install)"
+    cp -R "$LOCAL_PI/node_modules/$name" "$dest"
+  else
+    local tgz
+    tgz="$CACHE/$(printf '%s' "$name" | tr '/' '_')-$spec.tgz"
+    if [[ ! -s "$tgz" ]]; then
+      step "fetching $name@$spec"
+      npm pack "$name@$spec" --pack-destination "$CACHE" >/dev/null 2>&1 || true
+      [[ -s "$CACHE/$(basename "$name")-$spec.tgz" ]] && mv "$CACHE/$(basename "$name")-$spec.tgz" "$tgz"
+    fi
+    [[ -s "$tgz" ]] || { printf 'build: could not fetch %s@%s\n' "$name" "$spec" >&2; exit 1; }
+    rm -rf "$CACHE/dep" && mkdir -p "$CACHE/dep"
+    tar -xzf "$tgz" -C "$CACHE/dep"
+    cp -R "$CACHE/dep/package" "$dest"
+  fi
+}
+
+for dep in $RUNTIME_DEPS; do
+  install_runtime_dep "$dep"
+done
+"$PAYLOAD/runtime/node/bin/node" -e '
+  for (const m of process.argv.slice(1)) require.resolve(m, { paths: [process.argv[0]] });
+' "$PAYLOAD/runtime/pi/node_modules" jiti @silvia-odwyer/photon-node 2>/dev/null || true
 
 mkdir -p "$PAYLOAD/runtime/bin"
 cat >"$PAYLOAD/runtime/bin/pi" <<'EOF'
@@ -112,6 +159,10 @@ while [ -L "$self" ]; do
   case $self in /*) ;; *) self="$dir/$self" ;; esac
 done
 here=$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd)
+# NODE_PATH so CommonJS code (pi's own loader, and extensions) can resolve the
+# packages that the bundle does not inline
+NODE_PATH="$here/pi/node_modules${NODE_PATH:+:$NODE_PATH}"
+export NODE_PATH
 exec "$here/node/bin/node" "$here/pi/dist/bundle/cli.js" "$@"
 EOF
 chmod +x "$PAYLOAD/runtime/bin/pi" "$PAYLOAD/runtime/node/bin/node"
