@@ -36,31 +36,71 @@ function notFound() {
 }
 
 function landing() {
+  const repo = "https://github.com/timqian/hushface";
   const html = `<!doctype html>
+<html lang="en">
 <meta charset="utf-8">
-<title>hushface</title>
+<title>hushface — a coding agent that runs on your Mac</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="hushface: pi + Qwen3.8-27B with the pi LoRA adapter, local, one command.">
 <style>
-  :root { color-scheme: light dark }
-  body { font: 16px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 44rem; margin: 12vh auto; padding: 0 1.5rem }
-  h1 { font-size: 1.6rem; letter-spacing: .02em }
-  pre { background: rgba(127,127,127,.14); padding: 1rem; border-radius: .5rem; overflow-x: auto }
-  p, li { opacity: .85 }
-  code { opacity: 1 }
+  :root { color-scheme: light dark; --fg:#111; --bg:#fff; --dim:#666; --line:#e5e5e5; --code:rgba(127,127,127,.13) }
+  @media (prefers-color-scheme: dark) { :root { --fg:#e8e8e8; --bg:#111; --dim:#9a9a9a; --line:#2a2a2a } }
+  * { box-sizing: border-box }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:16px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace }
+  main { max-width: 46rem; margin: 0 auto; padding: 9vh 1.5rem 4rem }
+  header { display:flex; align-items:baseline; justify-content:space-between; gap:1rem;
+           padding-bottom:.9rem; border-bottom:1px solid var(--line); margin-bottom:2.2rem }
+  .brand { font-weight:600; letter-spacing:.04em }
+  .brand span { color:var(--dim) }
+  a { color:inherit; text-underline-offset:.18em; text-decoration-color:var(--dim) }
+  a:hover { text-decoration-color:currentColor }
+  header a { font-size:.85rem; color:var(--dim); text-decoration:none }
+  header a:hover { color:var(--fg) }
+  h1 { font-size:1.35rem; line-height:1.4; margin:0 0 1rem; font-weight:600 }
+  p { margin:.6rem 0; color:var(--dim) }
+  p strong { color:var(--fg); font-weight:600 }
+  pre { background:var(--code); padding:.9rem 1rem; border-radius:.4rem; overflow-x:auto;
+        margin:1.6rem 0; color:var(--fg) }
+  pre .d { color:var(--dim) }
+  ul { padding-left:1.1rem; color:var(--dim); margin:1.6rem 0 0 }
+  li { margin:.35rem 0 }
+  footer { margin-top:2.6rem; padding-top:1rem; border-top:1px solid var(--line);
+           font-size:.85rem; color:var(--dim); display:flex; gap:1.1rem; flex-wrap:wrap }
 </style>
-<h1>hushface</h1>
-<p>A coding agent that runs entirely on your Mac: <b>pi</b> + <b>Qwen3.8-27B</b>
-with the pi LoRA adapter, llama.cpp underneath.</p>
-<pre>curl -LsSf https://hushface.com/install.sh | sh</pre>
-<p>One 73&nbsp;MB file brings its own runtime (Node, pi, llama.cpp). No Homebrew,
-no Node, no Xcode tools. The 22&nbsp;GB of weights download on first run, from
-ModelScope or Hugging Face — your choice.</p>
-<ul>
-  <li><a href="/hushface-macos-arm64.sh">hushface-macos-arm64.sh</a></li>
-  <li><a href="/hushface-macos-arm64.sh.sha256">checksum</a></li>
-  <li><a href="https://github.com/timqian/hushface">source</a></li>
-</ul>
-<p>Apple Silicon, macOS 13+, 32&nbsp;GB RAM recommended.</p>
+<main>
+  <header>
+    <div class="brand">hushface <span>/ local coding agent</span></div>
+    <a href="${repo}">GitHub ↗</a>
+  </header>
+
+  <h1>An agent that runs entirely on your Mac.</h1>
+  <p><strong>pi</strong> driving <strong>Qwen3.8-27B</strong> with the pi LoRA
+     adapter, on llama.cpp. 27B parameters, no API key, no cloud, works offline
+     once installed.</p>
+
+  <pre>curl -LsSf https://hushface.com/install.sh | sh</pre>
+
+  <p>That single command is the whole install. It pulls a 73&nbsp;MB file that
+     carries its own runtime — Node, pi, llama.cpp — so there is no Homebrew, no
+     npm, no Xcode tools to install first. The 22&nbsp;GB of weights come down on
+     first run, resumably and checksum-verified, from
+     <strong>ModelScope</strong> or <strong>Hugging Face</strong> — your pick.</p>
+
+  <ul>
+    <li>Apple Silicon (M1 or newer), macOS 13+</li>
+    <li>32&nbsp;GB RAM recommended, 18&nbsp;GB free disk for the model</li>
+    <li>runs offline after the first download</li>
+  </ul>
+
+  <footer>
+    <a href="${repo}">github.com/timqian/hushface</a>
+    <a href="/hushface-macos-arm64.sh">download the file</a>
+    <a href="/hushface-macos-arm64.sh.sha256">checksum</a>
+  </footer>
+</main>
+</html>
 `;
   return new Response(html, {
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" },

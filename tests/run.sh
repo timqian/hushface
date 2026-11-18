@@ -338,8 +338,12 @@ t_cf_worker() {
     "worker maps versioned paths"
   assert_eq "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/nope.sh")" "404" \
     "worker 404s unknown keys"
-  assert_has "$(curl -s "http://127.0.0.1:$port/")" "curl -LsSf https://hushface.com/install.sh" \
-    "landing page carries the one-liner"
+  local page
+  page="$(curl -s "http://127.0.0.1:$port/")"
+  assert_has "$page" "curl -LsSf https://hushface.com/install.sh" "landing page carries the one-liner"
+  assert_has "$page" "https://github.com/timqian/hushface" "landing page links the GitHub repo"
+  assert_has "$page" "Apple Silicon" "landing page states the requirements"
+  assert_has "$page" "/hushface-macos-arm64.sh.sha256" "landing page links the checksum"
 
   # ranged requests are what resumable downloads depend on
   local hdr
